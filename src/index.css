@@ -1,0 +1,23 @@
+/* CARD-014: SSK DS font support.
+   The SSK design system declares `--font-p`, `--font-button`, `--font-label`,
+   `--font-caption` etc. all pointing to "DB HeaventRounded", sans-serif.
+   The DS package does NOT ship a @font-face, so we:
+     1. Load Noto Sans Thai from Google Fonts as a robust public-CDN fallback
+        (DS guidance: "DB HeaventRounded, Noto Sans Thai, sans-serif").
+     2. Apply var(--font-p) on body so DS-defined font cascade is the global
+        default. If DB HeaventRounded is installed locally it wins; otherwise
+        Noto Sans Thai is used; otherwise system sans.
+   DS styles.css itself is injected by main.jsx (DS @layer syntax is
+   incompatible with Tailwind v3 PostCSS — see Sprint Retro CARD-009). */
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-50 text-gray-900 antialiased;
+    font-family: var(--font-p, 'DB HeaventRounded', 'Noto Sans Thai', ui-sans-serif, system-ui, sans-serif);
+  }
+}
