@@ -15,5 +15,9 @@ const STATUS_LABEL = {
 
 export default function StockBadge({ quantity }) {
   const status = getStockStatus(quantity)
-  return <Badge variant={STATUS_VARIANT[status]}>{STATUS_LABEL[status]}</Badge>
+  return (
+    <Badge variant={STATUS_VARIANT[status] ?? 'default'}>
+      {STATUS_LABEL[status] ?? status}
+    </Badge>
+  )
 }

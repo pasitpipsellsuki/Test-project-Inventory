@@ -1,5 +1,12 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
-import { Plus, Minus, AlertOctagon, ArrowRight, ArrowLeft, Upload } from 'lucide-react'
+import {
+  Plus,
+  Minus,
+  RotateCcw,
+  ArrowRight,
+  ArrowLeft,
+  Upload,
+} from 'lucide-react'
 import {
   DSButton,
   DSInput,
@@ -12,23 +19,40 @@ import {
   Stepper,
 } from '@uxuissk/design-system'
 
-// CARD-008: StockAdjustmentModal
-// Multi-step modal for the 3 manual stock adjustment actions:
-//   - 'add_stock'    -> available +qty, quantity +qty
-//   - 'decrease'     -> available -qty, quantity -qty (block if qty > available)
-//   - 'mark_damaged' -> available -qty, unavailable +qty, quantity unchanged (block if qty > available)
+// CARD-018: StockAdjustmentModal — BRD PIS-INV-01 Round 8 refactor.
+//
+// The product action menu now has only 3 entries: Adjust Stock / Edit / Delete.
+// Mark Unavailable, Restore to Available, Transfer In and Transfer Out are no
+// longer separate entry points — they are reason codes inside the Add / Decrease
+// flows. The modal therefore only supports the single 'adjust' action.
+//
+//   - 'adjust' -> a merged Add+Decrease flow. Adds a TYPE_SELECT sub-step where
+//                 the user picks 'add' or 'decrease'. When opened with
+//                 preSelectedType ('add' | 'decrease') the TYPE_SELECT step is
+//                 skipped.
+//
+// The stock *effect* is reason-driven, not type-driven:
+//   - reason 'Restore to Available'        -> Unavailable -qty, Available +qty,
+//                                             On Hand unchanged. qty <= Unavailable.
+//   - reason 'Mark Unavailable (...)'      -> Available -qty, Unavailable +qty,
+//                                             On Hand unchanged. qty <= Available.
+//   - all other Add reasons                -> Available +qty, On Hand +qty.
+//   - all other Decrease reasons           -> Available -qty, On Hand -qty.
+//
+// getEffectiveType(resolvedType, reason) maps a (type, reason) pair to the
+// effective effect type ('add' | 'decrease' | 'mark_unavailable' |
+// 'restore_to_available') passed to onConfirm and the confirm modal.
 //
 // Steps:
-//   1. Opening screen: product summary + 5 stock fields aggregated across ALL locations.
-//   2. Location select (CCS3 only). Patona auto-selects the first in-store location.
-//   3. Qty + Reason entry. "Next: Review" calls onConfirm(adjustmentData) so the parent
-//      can hand off to Leo's StockAdjustmentConfirmModal.
+//   adjust:                OPENING -> TYPE_SELECT -> LOCATION -> ENTRY
+//   adjust + preSelected:  OPENING -> LOCATION -> ENTRY
+// (Patona context still skips LOCATION — first in-store location auto-selected.)
 //
-// mockApiError prop simulates an API failure on the Next: Review click — instead of
-// invoking onConfirm, an inline error with Retry / Cancel is shown.
+// mockApiError prop simulates an API failure on the Next: Review click — instead
+// of invoking onConfirm, an inline error with Retry / Cancel is shown.
 
 const ACTION_META = {
-  add_stock: {
+  add: {
     label: 'Add Stock',
     icon: Plus,
     accent: 'text-emerald-700',
@@ -40,6 +64,7 @@ const ACTION_META = {
       'Return',
       'Correction',
       'Initial Stock',
+      'Restore to Available',
       'Other',
     ],
   },
@@ -49,43 +74,86 @@ const ACTION_META = {
     accent: 'text-amber-700',
     accentBg: 'bg-amber-50',
     accentBorder: 'border-amber-200',
-    reasons: ['Transfer Out', 'Robbery', 'Write-off', 'Make Damage', 'Other'],
+    reasons: [
+      'Transfer Out',
+      'Robbery',
+      'Write-off',
+      'Discontinuation',
+      'Mark Unavailable (Damaged)',
+      'Mark Unavailable (Expired)',
+      'Mark Unavailable (Quarantined)',
+      'Mark Unavailable (Under Review)',
+      'Other',
+    ],
   },
-  mark_damaged: {
-    label: 'Mark as Damaged',
-    icon: AlertOctagon,
-    accent: 'text-red-700',
-    accentBg: 'bg-red-50',
-    accentBorder: 'border-red-200',
-    reasons: ['Damaged', 'Expired', 'Quarantined', 'Other'],
-  },
+}
+
+// Maps a (resolvedType, reason) pair to the effective stock-effect type.
+// Most reasons leave the effect equal to the picked type ('add' | 'decrease'),
+// but a handful of reason codes reclassify stock instead.
+function getEffectiveType(resolvedType, reason) {
+  if (reason === 'Restore to Available') return 'restore_to_available'
+  if (typeof reason === 'string' && reason.startsWith('Mark Unavailable')) {
+    return 'mark_unavailable'
+  }
+  return resolvedType
+}
+
+// Neutral meta used while the 'adjust' action has no resolved type yet
+// (i.e. the OPENING / TYPE_SELECT steps before a type is picked).
+const ADJUST_NEUTRAL_META = {
+  label: 'Adjust Stock',
+  icon: RotateCcw,
+  accent: 'text-gray-700',
+  accentBg: 'bg-gray-50',
+  accentBorder: 'border-gray-200',
+  reasons: [],
 }
 
 const STEPS = {
   OPENING: 1,
-  LOCATION: 2,
-  ENTRY: 3,
+  TYPE_SELECT: 2,
+  LOCATION: 3,
+  ENTRY: 4,
 }
+
+// Which resolved types validate the entered qty against the location's
+// "available" pool. 'mark_unavailable' is no longer a resolvedType — it is a
+// Decrease reason, so the 'decrease' entry already covers it. The
+// 'Restore to Available' reason validates against Unavailable instead and is
+// handled separately in validateQty.
+const AVAILABLE_LIMITED = new Set(['decrease'])
 
 export default function StockAdjustmentModal({
   product,
-  action,
+  // 'adjust' is the only supported action since BRD Round 8. Mark Unavailable /
+  // Restore / Transfer are reason codes inside the Add / Decrease flows.
+  preSelectedType, // 'add' | 'decrease' to skip the TYPE_SELECT step.
   role, // unused inside modal; gating happens in ProductTable
   context,
   onConfirm,
   onClose,
   mockApiError = false,
-  // when set, mount on this step (1, 2, or 3) — used by the
-  // confirm modal's Back nav to return the user to the entry step.
+  // when set, mount on this step — used by the confirm modal's Back nav to
+  // return the user to the entry step.
   initialStep,
-  // pre-fill { locationId, qty, reason, note, imageFile } when re-entering.
+  // pre-fill { locationId, qty, reason, note, imageFile, resolvedType } when
+  // re-entering from the confirm modal's Back button.
   initialState,
 }) {
-  const meta = ACTION_META[action]
   const stocks = product?.stocks || []
   const isPatona = context === 'patona'
 
-  // Patona: pre-select the first in-store location and skip step 2.
+  // Resolved adjust type — 'add' | 'decrease' once chosen (preSelectedType,
+  // restored state, or the TYPE_SELECT step).
+  const initialResolvedType =
+    initialState?.resolvedType ?? preSelectedType ?? null
+  const [resolvedType, setResolvedType] = useState(initialResolvedType)
+
+  // The meta used for rendering. Neutral gray until an adjust type is picked.
+  const meta = ACTION_META[resolvedType] || ADJUST_NEUTRAL_META
+
+  // Patona: pre-select the first in-store location and skip the LOCATION step.
   const patonaDefaultStock = useMemo(
     () => stocks.find((s) => s.location_type === 'in-store') || null,
     [stocks]
@@ -107,8 +175,9 @@ export default function StockAdjustmentModal({
   const fileInputRef = useRef(null)
 
   useEffect(() => {
-    // Reset on product/action change. Honor initialStep / initialState if
-    // provided (e.g. user clicked Back from the confirm modal).
+    // Reset on product change. Honor initialStep / initialState if provided
+    // (e.g. user clicked Back from the confirm modal).
+    setResolvedType(initialState?.resolvedType ?? preSelectedType ?? null)
     setStep(initialStep ?? STEPS.OPENING)
     setSelectedLocationId(
       initialState?.locationId
@@ -123,7 +192,7 @@ export default function StockAdjustmentModal({
     setApiError(false)
     setSubmitting(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [product?.id, action])
+  }, [product?.id, preSelectedType])
 
   if (!product || !meta) return null
 
@@ -143,12 +212,35 @@ export default function StockAdjustmentModal({
   }, [stocks])
 
   // Step navigation ----------------------------------------------------------
+  // The OPENING step routes to TYPE_SELECT unless a type was already resolved
+  // (preSelectedType / restored state).
   const goNextFromOpening = () => {
+    if (!resolvedType) {
+      setStep(STEPS.TYPE_SELECT)
+      return
+    }
     if (isPatona) {
-      // Skip location select.
       setStep(STEPS.ENTRY)
     } else {
       setStep(STEPS.LOCATION)
+    }
+  }
+
+  const goNextFromTypeSelect = (type) => {
+    setResolvedType(type)
+    if (isPatona) {
+      setStep(STEPS.ENTRY)
+    } else {
+      setStep(STEPS.LOCATION)
+    }
+  }
+
+  const goBackFromLocation = () => {
+    // Without a pre-selected type the previous step is TYPE_SELECT.
+    if (!preSelectedType && !initialState?.resolvedType) {
+      setStep(STEPS.TYPE_SELECT)
+    } else {
+      setStep(STEPS.OPENING)
     }
   }
 
@@ -157,7 +249,13 @@ export default function StockAdjustmentModal({
     setReasonError('')
     setApiError(false)
     if (isPatona) {
-      setStep(STEPS.OPENING)
+      // Patona has no LOCATION step. Previous step is TYPE_SELECT for an
+      // unresolved type, otherwise OPENING.
+      if (!preSelectedType && !initialState?.resolvedType) {
+        setStep(STEPS.TYPE_SELECT)
+      } else {
+        setStep(STEPS.OPENING)
+      }
     } else {
       setStep(STEPS.LOCATION)
     }
@@ -178,14 +276,26 @@ export default function StockAdjustmentModal({
     if (n > 999999) {
       return { ok: false, error: 'Maximum is 999,999' }
     }
-    if (
-      (action === 'decrease' || action === 'mark_damaged') &&
-      selectedStock &&
-      n > (Number(selectedStock.available) || 0)
-    ) {
-      return {
-        ok: false,
-        error: `Exceeds available stock (${Number(selectedStock.available) || 0} available)`,
+    // Reason 'Restore to Available': cannot exceed Unavailable at the location.
+    if (reason === 'Restore to Available' && selectedStock) {
+      const unav = Number(selectedStock.unavailable) || 0
+      if (n > unav) {
+        return {
+          ok: false,
+          error: `Cannot exceed current unavailable stock (${unav})`,
+        }
+      }
+      return { ok: true, value: n }
+    }
+    // decrease (incl. 'Mark Unavailable (...)' reasons): cannot exceed
+    // Available at the location.
+    if (AVAILABLE_LIMITED.has(resolvedType) && selectedStock) {
+      const avail = Number(selectedStock.available) || 0
+      if (n > avail) {
+        return {
+          ok: false,
+          error: `Exceeds available stock (${avail} available)`,
+        }
       }
     }
     return { ok: true, value: n }
@@ -204,8 +314,6 @@ export default function StockAdjustmentModal({
     }
 
     setSubmitting(true)
-    // Simulate API call. If mockApiError flag is set, fail; otherwise hand off
-    // to parent which opens the confirmation modal.
     if (mockApiError) {
       setApiError(true)
       setSubmitting(false)
@@ -213,7 +321,10 @@ export default function StockAdjustmentModal({
     }
     onConfirm({
       productId: product.id,
-      action,
+      // Effective stock-effect type — 'add' | 'decrease' | 'mark_unavailable' |
+      // 'restore_to_available'. Derived from the picked type + reason so the
+      // confirm modal applies the correct deltas.
+      action: getEffectiveType(resolvedType, reason),
       locationId: selectedStock.id,
       qty: qRes.value,
       reason,
@@ -229,27 +340,39 @@ export default function StockAdjustmentModal({
     setSubmitting(false)
   }
 
-  // Total step count for progress dots: Patona has 2 steps (opening -> entry),
-  // CCS3 has 3 (opening -> location -> entry).
-  const totalSteps = isPatona ? 2 : 3
-  // Map internal STEPS enum to a 1..totalSteps display index.
-  const displayStep =
-    step === STEPS.OPENING ? 1 : step === STEPS.LOCATION ? 2 : isPatona ? 2 : 3
+  // Step indicator -----------------------------------------------------------
+  // Steps shown depend on whether the type is still unresolved and the
+  // Patona/CCS3 context.
+  const showTypeSelectStep = !preSelectedType && !initialState?.resolvedType
+  const stepDefs = useMemo(() => {
+    const defs = [{ title: 'Overview', key: STEPS.OPENING }]
+    if (showTypeSelectStep) defs.push({ title: 'Type', key: STEPS.TYPE_SELECT })
+    if (!isPatona) defs.push({ title: 'Location', key: STEPS.LOCATION })
+    defs.push({ title: 'Entry', key: STEPS.ENTRY })
+    return defs
+  }, [showTypeSelectStep, isPatona])
 
-  // Determine "Next: Review" button variant based on action
-  const nextReviewVariant = action === 'mark_damaged' ? 'destructive' : 'primary'
+  const currentStepIndex = Math.max(
+    0,
+    stepDefs.findIndex((d) => d.key === step)
+  )
 
-  // Footer passed to Modal
+  // Determine "Next: Review" button variant based on resolved type.
+  const nextReviewVariant = resolvedType === 'decrease' ? 'destructive' : 'primary'
+
+  // Footer passed to Modal -----------------------------------------------------
   const footer = (
     <div className="flex justify-between w-full">
       <div>
-        {step !== STEPS.OPENING && (
+        {step !== STEPS.OPENING && step !== STEPS.TYPE_SELECT && (
           <DSButton
             variant="outline"
             leftIcon={<ArrowLeft size={14} />}
             onClick={() => {
               if (step === STEPS.ENTRY) {
                 goBackFromEntry()
+              } else if (step === STEPS.LOCATION) {
+                goBackFromLocation()
               } else {
                 setStep(STEPS.OPENING)
               }
@@ -272,6 +395,7 @@ export default function StockAdjustmentModal({
             Next
           </DSButton>
         )}
+        {/* TYPE_SELECT has no Next button — the cards advance the flow. */}
         {step === STEPS.LOCATION && (
           <DSButton
             variant="primary"
@@ -296,11 +420,14 @@ export default function StockAdjustmentModal({
     </div>
   )
 
+  // Heading: neutral "Adjust Stock" until a type is resolved.
+  const modalTitle = meta.label
+
   return (
     <Modal
       open={true}
       onClose={onClose}
-      title={meta.label}
+      title={modalTitle}
       size="lg"
       footer={footer}
     >
@@ -313,21 +440,20 @@ export default function StockAdjustmentModal({
       </div>
 
       {/* Step indicator */}
-      {(() => {
-        const stepDefs = isPatona
-          ? [{ title: 'Overview' }, { title: 'Entry' }]
-          : [{ title: 'Overview' }, { title: 'Location' }, { title: 'Entry' }]
-        const currentStep = displayStep - 1
-        return (
-          <div className="mb-5">
-            <Stepper steps={stepDefs} current={currentStep} orientation="horizontal" />
-          </div>
-        )
-      })()}
+      <div className="mb-5">
+        <Stepper
+          steps={stepDefs.map((d) => ({ title: d.title }))}
+          current={currentStepIndex}
+          orientation="horizontal"
+        />
+      </div>
 
       {/* Step body */}
       {step === STEPS.OPENING && (
         <OpeningStep meta={meta} totals={totals} />
+      )}
+      {step === STEPS.TYPE_SELECT && (
+        <TypeSelectStep onSelectType={goNextFromTypeSelect} onCancel={onClose} />
       )}
       {step === STEPS.LOCATION && (
         <LocationStep
@@ -339,7 +465,7 @@ export default function StockAdjustmentModal({
       {step === STEPS.ENTRY && (
         <EntryStep
           meta={meta}
-          action={action}
+          resolvedType={resolvedType}
           selectedStock={selectedStock}
           qty={qty}
           setQty={(v) => {
@@ -370,7 +496,7 @@ export default function StockAdjustmentModal({
 }
 
 // ---------------------------------------------------------------------------
-// Step 1 — Opening summary
+// Step 1 — Opening summary (all 5 stock fields)
 // ---------------------------------------------------------------------------
 function OpeningStep({ meta, totals }) {
   const stockColumns = [
@@ -401,7 +527,62 @@ function OpeningStep({ meta, totals }) {
 }
 
 // ---------------------------------------------------------------------------
-// Step 2 — Location selection (CCS3 only)
+// Step — Type selection (the 'adjust' action only)
+// ---------------------------------------------------------------------------
+function TypeSelectStep({ onSelectType }) {
+  const options = [
+    {
+      type: 'add',
+      title: 'Add',
+      subtext: 'Increase available stock',
+      icon: Plus,
+      accent: 'text-emerald-700',
+      ring: 'hover:border-emerald-300 hover:bg-emerald-50',
+      iconBg: 'bg-emerald-100 text-emerald-700',
+    },
+    {
+      type: 'decrease',
+      title: 'Decrease',
+      subtext: 'Remove stock from On Hand',
+      icon: Minus,
+      accent: 'text-amber-700',
+      ring: 'hover:border-amber-300 hover:bg-amber-50',
+      iconBg: 'bg-amber-100 text-amber-700',
+    },
+  ]
+  return (
+    <div className="space-y-4">
+      <h3 className="text-sm font-semibold text-gray-900">Adjust Stock</h3>
+      <p className="text-sm text-gray-600">
+        Choose how you want to adjust this product&apos;s stock.
+      </p>
+      <div className="grid grid-cols-2 gap-3">
+        {options.map((opt) => {
+          const Icon = opt.icon
+          return (
+            <button
+              key={opt.type}
+              type="button"
+              onClick={() => onSelectType(opt.type)}
+              className={`flex flex-col items-start gap-2 rounded-lg border border-gray-200 p-4 text-left transition-colors ${opt.ring}`}
+            >
+              <span className={`inline-flex h-9 w-9 items-center justify-center rounded-md ${opt.iconBg}`}>
+                <Icon size={18} />
+              </span>
+              <span className={`text-base font-semibold ${opt.accent}`}>
+                {opt.title}
+              </span>
+              <span className="text-xs text-gray-500">{opt.subtext}</span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Step — Location selection (CCS3 only)
 // ---------------------------------------------------------------------------
 function LocationStep({ stocks, selectedLocationId, onSelect }) {
   if (!stocks.length) {
@@ -411,6 +592,8 @@ function LocationStep({ stocks, selectedLocationId, onSelect }) {
       </Alert>
     )
   }
+  // The reason (and therefore the effective stock effect) is not known until
+  // the entry step, so always surface the Available figure here.
   return (
     <div className="space-y-3">
       <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500">
@@ -443,11 +626,11 @@ function LocationStep({ stocks, selectedLocationId, onSelect }) {
 }
 
 // ---------------------------------------------------------------------------
-// Step 3 — Qty + Reason + Note + Image entry
+// Step — Qty + Reason + Note + Image entry
 // ---------------------------------------------------------------------------
 function EntryStep({
   meta,
-  action,
+  resolvedType,
   selectedStock,
   qty,
   setQty,
@@ -474,6 +657,24 @@ function EntryStep({
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
+  // Which pool the entered qty is limited by, for the location summary card +
+  // helper text. This is reason-driven: the 'Restore to Available' reason is
+  // bounded by Unavailable, decrease (incl. 'Mark Unavailable (...)') is
+  // bounded by Available, plain add is unbounded.
+  const limitedByUnavailable = reason === 'Restore to Available'
+  const limitedByAvailable = resolvedType === 'decrease' && !limitedByUnavailable
+  const poolLabel = limitedByUnavailable ? 'Current Unavailable' : 'Current Available'
+  const poolValue = limitedByUnavailable
+    ? Number(selectedStock?.unavailable) || 0
+    : Number(selectedStock?.available) || 0
+
+  let qtyHelper = 'Whole number between 1 and 999,999'
+  if (selectedStock && limitedByUnavailable) {
+    qtyHelper += ` — cannot exceed ${(Number(selectedStock.unavailable) || 0).toLocaleString()} unavailable`
+  } else if (selectedStock && limitedByAvailable) {
+    qtyHelper += ` — cannot exceed ${(Number(selectedStock.available) || 0).toLocaleString()} available`
+  }
+
   return (
     <div className="space-y-4">
       {selectedStock && (
@@ -489,10 +690,10 @@ function EntryStep({
             </div>
             <div className="text-right">
               <div className="text-xs uppercase tracking-wider text-gray-500">
-                Current Available
+                {poolLabel}
               </div>
               <div className="font-semibold tabular-nums text-gray-900">
-                {Number(selectedStock.available).toLocaleString()}
+                {poolValue.toLocaleString()}
               </div>
             </div>
           </div>
@@ -508,11 +709,7 @@ function EntryStep({
         placeholder="Enter quantity"
         state={qtyError ? 'error' : 'default'}
         errorMessage={qtyError}
-        helperText={`Whole number between 1 and 999,999${
-          (action === 'decrease' || action === 'mark_damaged') && selectedStock
-            ? ` — cannot exceed ${Number(selectedStock.available).toLocaleString()} available`
-            : ''
-        }`}
+        helperText={qtyHelper}
       />
 
       <Dropdown

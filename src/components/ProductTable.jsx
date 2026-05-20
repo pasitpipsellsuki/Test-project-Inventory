@@ -6,24 +6,17 @@ import {
   AlertTriangle,
   SlidersHorizontal,
   MoreVertical,
-  Plus,
-  Minus,
-  ArrowLeftRight,
 } from 'lucide-react'
 import {
   DSButton,
   DSTable,
   Badge,
-  Card,
-  CardHeader,
-  CardBody,
   EmptyState,
   Menu,
   IconButton,
 } from '@uxuissk/design-system'
 import StockBadge from './StockBadge'
-import TransferStockModal from './TransferStockModal'
-import { getTotalQuantity, isLowStock } from '../constants/inventory'
+import { getTotalAvailable, isLowStock } from '../constants/inventory'
 
 // CARD-006:
 // - Qty column: physical -> total quantity across stocks (clickable -> opens breakdown modal).
@@ -44,13 +37,11 @@ import { getTotalQuantity, isLowStock } from '../constants/inventory'
 // - Archive calls onArchive(product); Delete keeps existing onDelete signature
 //   (Leo's ArchiveDeleteGuard wraps the delete confirm in App.jsx).
 //
-// CARD-015:
-// - "Transfer Stock" menu item added between adjustment actions and Delete.
-//   Visible to Company Owner only (role === 'company_owner').
-// - TransferStockModal mounts at the table level using `transferModalProduct`
-//   state. On successful transfer the modal returns the full updated stocks
-//   array; we bubble it via `onTransferComplete(productId, updatedStocks)` so
-//   the parent (App.jsx) can merge it into product state.
+// CARD-018 (BRD Round 8, 2026-05-19):
+// - "Transfer Stock" menu item and TransferStockModal removed entirely.
+//   Transfer is now handled via Transfer In / Transfer Out reason codes
+//   inside the Adjust Stock flow. canTransfer / onTransferComplete prop
+//   chain dropped.
 export default function ProductTable({
   products,
   role,
@@ -60,17 +51,11 @@ export default function ProductTable({
   onOpenBreakdown,
   onOpenThreshold,
   onOpenAdjust,
-  onTransferComplete,
   stockFailure = false,
 }) {
   const isStaff = role === 'store_staff'
-  const isCompanyOwner = role === 'company_owner'
   const canSetThreshold = !isStaff
   const canAdjust = !isStaff
-  const canTransfer = isCompanyOwner
-
-  // CARD-015: which product (if any) currently has the Transfer Stock modal open.
-  const [transferModalProduct, setTransferModalProduct] = useState(null)
 
   const columns = [
     {
@@ -108,10 +93,10 @@ export default function ProductTable({
     },
     {
       key: 'quantity',
-      header: 'Quantity',
+      header: 'Available',
       render: (_, row) => {
         const isPhysical = row.productType === 'physical'
-        const totalQty   = getTotalQuantity(row.stocks)
+        const totalQty   = getTotalAvailable(row.stocks)
         const lowStock   = isPhysical && !stockFailure && isLowStock(row)
         return (
           <div className="inline-flex items-center gap-1.5 justify-end">
@@ -146,7 +131,7 @@ export default function ProductTable({
       header: 'Status',
       render: (_, row) => {
         const isPhysical = row.productType === 'physical'
-        const totalQty   = getTotalQuantity(row.stocks)
+        const totalQty   = getTotalAvailable(row.stocks)
         return isPhysical && !stockFailure ? (
           <StockBadge quantity={totalQty} />
         ) : (
@@ -164,12 +149,10 @@ export default function ProductTable({
             product={row}
             canAdjust={canAdjust && isPhysical}
             canSetThreshold={canSetThreshold}
-            canTransfer={canTransfer && isPhysical}
             onEdit={onEdit}
             onOpenAdjust={onOpenAdjust}
             onOpenThreshold={onOpenThreshold}
             onDelete={onDelete}
-            onOpenTransfer={(product) => setTransferModalProduct(product)}
           />
         )
       },
@@ -178,63 +161,27 @@ export default function ProductTable({
 
   return (
     <>
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-medium text-gray-700">Inventory</h3>
+      {products.length === 0 ? (
+        <EmptyState
+          icon={<PackagePlus size={48} />}
+          title="No products found"
+          description="Try adjusting your search or filters, or add a new product."
+          action={
             <DSButton
               variant="primary"
-              size="md"
-              leftIcon={<PackagePlus size={15} />}
+              leftIcon={<PackagePlus size={16} />}
               onClick={onAdd}
             >
               Add Product
             </DSButton>
-          </div>
-        </CardHeader>
-        <CardBody>
-          {products.length === 0 ? (
-            <EmptyState
-              icon={<PackagePlus size={48} />}
-              title="No products found"
-              description="Try adjusting your search or filters, or add a new product."
-              action={
-                <DSButton
-                  variant="primary"
-                  leftIcon={<PackagePlus size={16} />}
-                  onClick={onAdd}
-                >
-                  Add Product
-                </DSButton>
-              }
-            />
-          ) : (
-            <DSTable
-              columns={columns}
-              data={products}
-              hoverable
-              striped
-            />
-          )}
-        </CardBody>
-      </Card>
-
-      {/* CARD-015: Transfer Stock modal (Aria-owned component). Mounted once
-          at the table level; the active product is held in local state.
-          The modal returns the full updated stocks array via
-          onTransferComplete — we bubble it up to the parent so product state
-          stays a single source of truth in App.jsx. */}
-      {transferModalProduct && (
-        <TransferStockModal
-          isOpen={!!transferModalProduct}
-          onClose={() => setTransferModalProduct(null)}
-          product={transferModalProduct}
-          userRole={role}
-          onTransferComplete={(updatedStocks) => {
-            onTransferComplete &&
-              onTransferComplete(transferModalProduct.id, updatedStocks)
-            setTransferModalProduct(null)
-          }}
+          }
+        />
+      ) : (
+        <DSTable
+          columns={columns}
+          data={products}
+          hoverable
+          striped
         />
       )}
     </>
@@ -264,40 +211,40 @@ function QtyCell({ product, isPhysical, totalQty, stockFailure, onOpenBreakdown 
   )
 }
 
-// CARD-008: Single overflow menu with the full action set per CARD-008.
+// CARD-008: Single overflow menu with the full action set.
 // Adjustment items hidden when canAdjust=false (Store Staff or non-physical).
 // Threshold item hidden when canSetThreshold=false (Store Staff).
-// CARD-015: "Transfer Stock" entry added, gated by canTransfer (Company Owner
-// + physical product). Placed after adjustment/threshold actions and Archive,
-// immediately before the destructive Delete entry.
+//
+// CARD-017 (BRD JC-01, 2026-05-19): Adjustment block reworked into a single
+// "Adjust Stock" (adjust) entry, gated by canAdjust (!isStaff && isPhysical).
+//
+// CARD-018 (BRD Round 8, 2026-05-19): Menu trimmed to 3 entries max.
+// - Removed: "Mark Unavailable" and "Restore to Available" (now reason codes
+//   inside the Adjust Stock flow).
+// - Removed: "Transfer Stock" (now Transfer In/Out reason codes).
+// Menu = Edit Product / [divider] / Adjust Stock / [divider] /
+//   Set Stock Threshold (if applicable) / [divider] / Delete Product.
 function RowActionMenu({
   product,
   canAdjust,
   canSetThreshold,
-  canTransfer,
   onEdit,
   onOpenAdjust,
   onOpenThreshold,
   onDelete,
-  onOpenTransfer,
 }) {
   const [open, setOpen] = useState(false)
   const triggerRef = useRef(null)
 
   const items = [
     { text: 'Edit Product', icon: <Pencil size={15} />, onClick: () => { setOpen(false); onEdit && onEdit(product) } },
-    { divider: true },
-    ...(canAdjust ? [
-      { text: 'Add Stock', icon: <Plus size={15} />, onClick: () => { setOpen(false); onOpenAdjust && onOpenAdjust(product, 'add_stock') } },
-      { text: 'Decrease', icon: <Minus size={15} />, onClick: () => { setOpen(false); onOpenAdjust && onOpenAdjust(product, 'decrease') } },
-    ] : []),
     ...(canAdjust || canSetThreshold ? [{ divider: true }] : []),
+    ...(canAdjust ? [
+      { text: 'Adjust Stock', icon: <PackagePlus size={15} />, onClick: () => { setOpen(false); onOpenAdjust && onOpenAdjust(product, 'adjust') } },
+    ] : []),
+    ...(canAdjust && canSetThreshold ? [{ divider: true }] : []),
     ...(canSetThreshold ? [
       { text: 'Set Stock Threshold', icon: <SlidersHorizontal size={15} />, onClick: () => { setOpen(false); onOpenThreshold && onOpenThreshold(product) } },
-    ] : []),
-    ...(canTransfer ? [
-      { divider: true },
-      { text: 'Transfer Stock', icon: <ArrowLeftRight size={15} />, onClick: () => { setOpen(false); onOpenTransfer && onOpenTransfer(product) } },
     ] : []),
     { divider: true },
     { text: 'Delete Product', icon: <Trash2 size={15} />, onClick: () => { setOpen(false); onDelete && onDelete(product) }, destructive: true },

@@ -1,11 +1,11 @@
-import { Search, X, AlertTriangle } from 'lucide-react'
-import { DSButton, DSInput, Dropdown } from "@uxuissk/design-system"
+import { AlertTriangle } from 'lucide-react'
+import { SearchField, Dropdown, DSButton } from "@uxuissk/design-system"
 
 const STOCK_STATUS_OPTIONS = [
-  { value: 'all',           label: 'All Statuses'   },
-  { value: 'in-stock',      label: 'In Stock'        },
-  { value: 'low-stock',     label: 'Low Stock'       },
-  { value: 'out-of-stock',  label: 'Out of Stock'    },
+  { value: 'all',          label: 'All Statuses'  },
+  { value: 'in-stock',     label: 'In Stock'       },
+  { value: 'low-stock',    label: 'Low Stock'      },
+  { value: 'out-of-stock', label: 'Out of Stock'   },
 ]
 
 export default function SearchFilterBar({
@@ -26,40 +26,37 @@ export default function SearchFilterBar({
   const isFiltered =
     searchQuery || categoryFilter !== 'all' || stockFilter !== 'all' || lowStockOnly
 
+  const categoryOptions = [
+    { value: 'all', label: 'All Categories' },
+    ...allCategories.map((c) => ({ value: c, label: c })),
+  ]
+
   return (
     <div className="mb-4 space-y-3">
       <div className="flex flex-wrap items-center gap-3">
-        {/* Search */}
-        <div className="flex-1 min-w-[200px]">
-          <DSInput
-            leftIcon={<Search size={15} />}
-            placeholder="Search by name or SKU…"
+        <div className="flex-1 min-w-[220px]">
+          <SearchField
             value={searchQuery}
-            onChange={(e) => onSearch(e.target.value)}
+            onChange={onSearch}
+            placeholder="Search by name or SKU…"
             clearable
-            fullWidth
           />
         </div>
 
-        {/* Category filter */}
         <Dropdown
-          options={[
-            { value: 'all', label: 'All Categories' },
-            ...allCategories.map((c) => ({ value: c, label: c })),
-          ]}
+          options={categoryOptions}
           value={categoryFilter}
-          onChange={onCategoryFilter}
+          onChange={(v) => onCategoryFilter(v ?? 'all')}
           placeholder="All Categories"
         />
 
-        {/* Stock status filter */}
         <Dropdown
           options={STOCK_STATUS_OPTIONS}
           value={stockFilter}
-          onChange={onStockFilter}
+          onChange={(v) => onStockFilter(v ?? 'all')}
+          placeholder="All Statuses"
         />
 
-        {/* CARD-007: Low Stock toggle (separate from stock-status dropdown) */}
         <DSButton
           variant={lowStockOnly ? 'primary' : 'outline'}
           size="md"
@@ -70,19 +67,13 @@ export default function SearchFilterBar({
           {lowStockOnly ? `Low Stock (${lowStockCount})` : 'Low Stock'}
         </DSButton>
 
-        {/* Clear filters */}
         {isFiltered && (
-          <DSButton
-            variant="outline"
-            leftIcon={<X size={14} />}
-            onClick={onClearFilters}
-          >
+          <DSButton variant="outline" onClick={onClearFilters}>
             Clear filters
           </DSButton>
         )}
       </div>
 
-      {/* Result count */}
       <p className="text-xs text-gray-500">
         {isFiltered
           ? `Showing ${filteredCount} of ${totalCount} product${totalCount !== 1 ? 's' : ''}`

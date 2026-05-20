@@ -18,18 +18,22 @@ export function getTotalAvailable(stocks) {
   return stocks.reduce((sum, s) => sum + (Number(s.available) || 0), 0)
 }
 
-// Available across in-store locations only.
-export function getStoreAvailable(stocks) {
+// Sum of available across in-store locations only.
+export function getInStoreAvailable(stocks) {
   if (!Array.isArray(stocks) || stocks.length === 0) return 0
   return stocks
     .filter((s) => s.location_type === 'in-store')
     .reduce((sum, s) => sum + (Number(s.available) || 0), 0)
 }
 
-// Per-location threshold evaluation.
-// Returns true if any in-store location has available stock below its threshold.
+// Low stock evaluation. If a product-level stockLimits.min is set, low stock =
+// sum of in-store available <= min. Otherwise falls back to per-location
+// threshold: true if any in-store location available < its threshold.
 export function isLowStock(product) {
   if (!product || product.productType !== 'physical') return false
+  if (product.stockLimits?.min != null) {
+    return getInStoreAvailable(product.stocks) <= product.stockLimits.min
+  }
   return (product.stocks || []).some(
     (s) => s.threshold != null && (Number(s.available) || 0) < s.threshold
   )

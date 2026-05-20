@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
-import { ShieldAlert } from 'lucide-react'
-import { Tabs, TopNavbar } from '@uxuissk/design-system'
+import { ShieldAlert, PackagePlus } from 'lucide-react'
+import { DSButton, Tabs, TopNavbar } from '@uxuissk/design-system'
 import Sidebar from './components/Sidebar'
 import ProductTable from './components/ProductTable'
 import ProductForm from './components/ProductForm'
@@ -13,8 +13,10 @@ import StockThresholdModal from './components/StockThresholdModal'
 import StockAdjustmentModal from './components/StockAdjustmentModal'
 // CARD-008: Leo's confirmation review modal (StockAdjustmentConfirmModal.jsx)
 import StockAdjustmentConfirmModal from './components/StockAdjustmentConfirmModal'
+// CARD-019: Min/Max stock limits settings view (Aria).
+import StockLimitsSettings from './components/StockLimitsSettings'
 import { mockProducts } from './data/mockProducts'
-import { isLowStock, getStockStatus, getTotalQuantity } from './constants/inventory'
+import { isLowStock, getStockStatus, getTotalAvailable } from './constants/inventory'
 
 // CARD-006: role/context simulation for local dev (no real auth).
 // Company Owner -> CCS3 (sees all locations).
@@ -37,7 +39,7 @@ function contextForRole(role) {
   return role === ROLES.COMPANY_OWNER ? CONTEXTS.CCS3 : CONTEXTS.PATONA
 }
 
-const VIEWS = { PRODUCTS: 'products', ALERTS: 'alerts' }
+const VIEWS = { PRODUCTS: 'products', ALERTS: 'alerts', SETTINGS: 'settings' }
 
 export default function App() {
   // Core state
@@ -73,9 +75,12 @@ export default function App() {
   // CARD-006: stock failure simulation flag (toggleable in dev header).
   const [stockFailure, setStockFailure] = useState(false)
 
-  // CARD-008: stock adjustment modal state (Aria's component).
+  // CARD-008 / CARD-017: stock adjustment modal state (Aria's component).
   const [adjustOpen, setAdjustOpen]             = useState(false)
-  const [adjustAction, setAdjustAction]         = useState(null) // 'add_stock' | 'decrease' | 'mark_damaged'
+  // Entry action: 'adjust' | 'mark_unavailable' | 'restore_to_available'.
+  const [adjustAction, setAdjustAction]         = useState(null)
+  // CARD-017: optional pre-selected type for the 'adjust' action ('add' | 'decrease').
+  const [adjustPreSelectedType, setAdjustPreSelectedType] = useState(null)
   const [adjustProduct, setAdjustProduct]       = useState(null)
   // CARD-008: confirmation review modal state (Leo's component).
   const [confirmOpen, setConfirmOpen]                 = useState(false)
@@ -119,7 +124,7 @@ export default function App() {
       const matchesStock =
         stockFilter === 'all' ||
         p.productType !== 'physical' ||
-        getStockStatus(getTotalQuantity(p.stocks)) === stockFilter
+        getStockStatus(getTotalAvailable(p.stocks)) === stockFilter
 
       // CARD-007: low-stock-only toggle (available-based, per-threshold logic).
       const matchesLowStock = !lowStockOnly || isLowStock(p)
@@ -162,17 +167,15 @@ export default function App() {
     setThresholdOpen(false)
     setSelectedThresholdProduct(null)
   }
-  // locationThresholds = [{ locationId, threshold: number | null }]
-  const handleThresholdSave = (productId, locationThresholds) => {
+  // CARD-020: thresholds are now master Min/Max stock limits.
+  // limits = { min: number | null, max: number | null }
+  const handleThresholdSave = (productId, { min, max }) => {
     setProducts((prev) =>
       prev.map((p) => {
         if (p.id !== productId) return p
         return {
           ...p,
-          stocks: p.stocks.map((s) => {
-            const found = locationThresholds.find((lt) => lt.locationId === s.id)
-            return found !== undefined ? { ...s, threshold: found.threshold } : s
-          }),
+          stockLimits: { min, max },
           updatedAt: new Date().toISOString(),
         }
       })
@@ -254,11 +257,16 @@ export default function App() {
   }
 
   // Stock adjustment flow handlers.
-  const handleOpenAdjust = (product, action) => {
+  // CARD-017: `action` is the modal entry point ('adjust' | 'mark_unavailable'
+  // | 'restore_to_available'). `preSelectedType` is only meaningful for the
+  // 'adjust' action — when set ('add' | 'decrease') the modal skips its
+  // TYPE_SELECT step. The Delete Guard (CARD-016) passes 'adjust' + 'decrease'.
+  const handleOpenAdjust = (product, action, preSelectedType = null) => {
     // Fresh open from product table — clear any prior pre-fill from a Back nav.
     setAdjustInitialState(null)
     setAdjustProduct(product)
     setAdjustAction(action)
+    setAdjustPreSelectedType(action === 'adjust' ? preSelectedType : null)
     setAdjustOpen(true)
   }
 
@@ -270,6 +278,9 @@ export default function App() {
   }
 
   // Back from confirm modal restores entry step pre-filled (incl. note + imageFile).
+  // CARD-017: pendingAdjustment.action is the RESOLVED type ('add' | 'decrease'
+  // | 'mark_unavailable' | 'restore_to_available'). Carry it through as
+  // resolvedType so the modal skips TYPE_SELECT and lands back on ENTRY.
   const handleAdjustBack = () => {
     setConfirmOpen(false)
     setAdjustInitialState({
@@ -278,6 +289,7 @@ export default function App() {
       reason: pendingAdjustment?.reason,
       note: pendingAdjustment?.note ?? '',
       imageFile: pendingAdjustment?.imageFile ?? null,
+      resolvedType: pendingAdjustment?.action ?? null,
     })
     setAdjustOpen(true)
   }
@@ -293,7 +305,8 @@ export default function App() {
           const avail = Number(s.available) || 0
           const unav = Number(s.unavailable) || 0
           const quan = Number(s.quantity) || 0
-          if (action === 'add_stock') {
+          // CARD-017: `action` is the resolved adjustment type.
+          if (action === 'add') {
             return {
               ...s,
               available: avail + qty,
@@ -309,12 +322,21 @@ export default function App() {
               updatedAt: new Date().toISOString(),
             }
           }
-          if (action === 'mark_damaged') {
+          if (action === 'mark_unavailable') {
             return {
               ...s,
               available: avail - qty,
               unavailable: unav + qty,
-              // quantity unchanged
+              // quantity (On Hand) unchanged
+              updatedAt: new Date().toISOString(),
+            }
+          }
+          if (action === 'restore_to_available') {
+            return {
+              ...s,
+              available: avail + qty,
+              unavailable: unav - qty,
+              // quantity (On Hand) unchanged
               updatedAt: new Date().toISOString(),
             }
           }
@@ -327,6 +349,7 @@ export default function App() {
     setPendingAdjustment(null)
     setAdjustProduct(null)
     setAdjustAction(null)
+    setAdjustPreSelectedType(null)
     setAdjustInitialState(null)
   }
 
@@ -336,7 +359,13 @@ export default function App() {
     setPendingAdjustment(null)
     setAdjustProduct(null)
     setAdjustAction(null)
+    setAdjustPreSelectedType(null)
     setAdjustInitialState(null)
+  }
+
+  // CARD-019: persist Min/Max stock limit edits from StockLimitsSettings.
+  const handleSaveLimits = (updatedProducts) => {
+    setProducts(updatedProducts)
   }
 
   const handleClearFilters = () => {
@@ -359,6 +388,7 @@ export default function App() {
       label: 'Low Stock Alerts',
       badge: lowStockProducts.length > 0 ? String(lowStockProducts.length) : undefined,
     },
+    { id: VIEWS.SETTINGS, label: 'Stock Limits' },
   ]
 
   return (
@@ -390,72 +420,85 @@ export default function App() {
         <Sidebar expanded={sidebarExpanded} onToggle={setSidebarExpanded} />
 
         {/* ── CONTENT AREA ── */}
-        <main className="flex-1 overflow-auto bg-gray-100 p-6">
+        <main className="flex-1 overflow-auto bg-gray-100 p-5">
+          <div className="bg-white border border-gray-200 rounded-lg w-full">
 
-          {/* Nav tabs — DS Tabs, stays at top of PIS content */}
-          <div className="mb-4">
-            <Tabs
-              tabs={navTabs}
-              activeTab={currentView}
-              onChange={(id) => setCurrentView(id)}
-              variant="underline"
-            />
+            <div className="flex justify-between items-center px-6 py-5">
+              <h1 className="text-2xl font-semibold text-gray-800">Products</h1>
+              {currentView === VIEWS.PRODUCTS && (
+                <DSButton
+                  variant="primary"
+                  size="md"
+                  leftIcon={<PackagePlus size={15} />}
+                  onClick={handleAddClick}
+                >
+                  Add Product
+                </DSButton>
+              )}
+            </div>
+
+            <div className="border-t border-gray-200">
+              <Tabs
+                tabs={navTabs}
+                activeTab={currentView}
+                onChange={(id) => setCurrentView(id)}
+                variant="underline"
+              />
+            </div>
+
+            <div className="p-6">
+              {currentView === VIEWS.PRODUCTS && (
+                <>
+                  <LowStockAlertBanner
+                    lowStockProducts={lowStockProducts}
+                    onViewAlerts={() => setCurrentView(VIEWS.ALERTS)}
+                  />
+
+                  <SearchFilterBar
+                    searchQuery={searchQuery}
+                    categoryFilter={categoryFilter}
+                    stockFilter={stockFilter}
+                    lowStockOnly={lowStockOnly}
+                    lowStockCount={lowStockProducts.length}
+                    allCategories={allCategories}
+                    filteredCount={filteredProducts.length}
+                    totalCount={products.length}
+                    onSearch={setSearchQuery}
+                    onCategoryFilter={setCategoryFilter}
+                    onStockFilter={setStockFilter}
+                    onToggleLowStock={() => setLowStockOnly((v) => !v)}
+                    onClearFilters={handleClearFilters}
+                  />
+
+                  <ProductTable
+                    products={filteredProducts}
+                    role={role}
+                    context={context}
+                    stockFailure={stockFailure}
+                    onAdd={handleAddClick}
+                    onEdit={handleEditClick}
+                    onDelete={handleDeleteClick}
+                    onOpenBreakdown={handleOpenBreakdown}
+                    onOpenThreshold={handleOpenThreshold}
+                    onOpenAdjust={handleOpenAdjust}
+                  />
+                </>
+              )}
+
+              {currentView === VIEWS.ALERTS && (
+                <LowStockAlertsView lowStockProducts={lowStockProducts} />
+              )}
+
+              {currentView === VIEWS.SETTINGS && (
+                <StockLimitsSettings
+                  products={products}
+                  role={role}
+                  onSave={handleSaveLimits}
+                />
+              )}
+            </div>
+
           </div>
-
-          {currentView === VIEWS.PRODUCTS && (
-            <>
-              {/* Alert banner */}
-              <LowStockAlertBanner
-                lowStockProducts={lowStockProducts}
-                onViewAlerts={() => setCurrentView(VIEWS.ALERTS)}
-              />
-
-              {/* Search + filter */}
-              <SearchFilterBar
-                searchQuery={searchQuery}
-                categoryFilter={categoryFilter}
-                stockFilter={stockFilter}
-                lowStockOnly={lowStockOnly}
-                lowStockCount={lowStockProducts.length}
-                allCategories={allCategories}
-                filteredCount={filteredProducts.length}
-                totalCount={products.length}
-                onSearch={setSearchQuery}
-                onCategoryFilter={setCategoryFilter}
-                onStockFilter={setStockFilter}
-                onToggleLowStock={() => setLowStockOnly((v) => !v)}
-                onClearFilters={handleClearFilters}
-              />
-
-              {/* Product table */}
-              <ProductTable
-                products={filteredProducts}
-                role={role}
-                context={context}
-                stockFailure={stockFailure}
-                onAdd={handleAddClick}
-                onEdit={handleEditClick}
-                onDelete={handleDeleteClick}
-                onOpenBreakdown={handleOpenBreakdown}
-                onOpenThreshold={handleOpenThreshold}
-                onOpenAdjust={handleOpenAdjust}
-                onTransferComplete={(productId, updatedStocks) =>
-                  setProducts((prev) =>
-                    prev.map((p) =>
-                      p.id === productId
-                        ? { ...p, stocks: updatedStocks, updatedAt: new Date().toISOString() }
-                        : p
-                    )
-                  )
-                }
-              />
-            </>
-          )}
-
-          {currentView === VIEWS.ALERTS && (
-            <LowStockAlertsView lowStockProducts={lowStockProducts} />
-          )}
-
         </main>
       </div>
 
@@ -482,7 +525,9 @@ export default function App() {
           onClose={handleDeleteClose}
           onGoToAdjust={() => {
             handleDeleteClose()
-            handleOpenAdjust(selectedProduct, 'decrease')
+            // CARD-017: open the merged 'adjust' modal with 'decrease' pre-selected
+            // so the Delete Guard lands the user straight on the entry step.
+            handleOpenAdjust(selectedProduct, 'adjust', 'decrease')
           }}
         />
       )}
@@ -507,17 +552,20 @@ export default function App() {
         />
       )}
 
-      {/* CARD-008: Stock adjustment modal (Aria) — Step 1-3 of the flow */}
+      {/* CARD-017: Stock adjustment modal (Aria) — opening through entry steps */}
       {adjustOpen && adjustProduct && adjustAction && (
         <StockAdjustmentModal
           product={adjustProduct}
           action={adjustAction}
+          preSelectedType={adjustPreSelectedType}
           role={role}
           context={context}
           onConfirm={handleAdjustConfirm}
           onClose={handleAdjustCancel}
           mockApiError={mockApiError}
-          initialStep={adjustInitialState ? 3 : undefined}
+          // initialStep 4 == ENTRY in the CARD-017 STEPS enum; used when the
+          // user clicks Back from the confirm modal.
+          initialStep={adjustInitialState ? 4 : undefined}
           initialState={adjustInitialState}
         />
       )}

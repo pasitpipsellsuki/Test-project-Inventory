@@ -5,6 +5,9 @@
 // Only in-store locations are managed by this system; fulfillment locations
 // are managed by WMS and are not included here.
 // `productType` drives qty-column display ('physical' shows total; digital/service show "–").
+// stockLimits: { min, max } — per-SKU Min/Max stock limits (CARD-019). Physical
+// products only. null means no limit configured. Min drives isLowStock when set
+// (sum of in-store available <= min). Max is informational only.
 
 export const mockProducts = [
   {
@@ -16,6 +19,7 @@ export const mockProducts = [
     productType: 'physical',
     status: 'active',
     updatedAt: '2026-03-28T09:15:00.000Z',
+    stockLimits: { min: 65, max: 120 },
     stocks: [
       {
         id: 102,
@@ -41,6 +45,42 @@ export const mockProducts = [
         threshold: 10,
         updatedAt: '2026-03-28T09:15:00.000Z',
       },
+      {
+        id: 'loc-instore-3',
+        location_name: 'สาขาอโศก',
+        location_type: 'in-store',
+        quantity: 11,        // 8 + 1 + 2 + 0
+        available: 8,
+        unavailable: 1,
+        reserve: 2,
+        preorder: 0,
+        threshold: 12,
+        updatedAt: '2026-03-28T09:15:00.000Z',
+      },
+      {
+        id: 'loc-instore-4',
+        location_name: 'สาขาสยาม',
+        location_type: 'in-store',
+        quantity: 27,        // 22 + 3 + 2 + 0
+        available: 22,
+        unavailable: 3,
+        reserve: 2,
+        preorder: 0,
+        threshold: 15,
+        updatedAt: '2026-03-28T09:15:00.000Z',
+      },
+      {
+        id: 'loc-instore-5',
+        location_name: 'สาขารัชดา',
+        location_type: 'in-store',
+        quantity: 7,         // 5 + 0 + 1 + 1
+        available: 5,
+        unavailable: 0,
+        reserve: 1,
+        preorder: 1,
+        threshold: 10,
+        updatedAt: '2026-03-28T09:15:00.000Z',
+      },
     ],
   },
   {
@@ -52,6 +92,7 @@ export const mockProducts = [
     productType: 'physical',
     status: 'active',
     updatedAt: '2026-04-01T14:30:00.000Z',
+    stockLimits: { min: 30, max: 60 },
     stocks: [
       {
         id: 202,
@@ -77,6 +118,42 @@ export const mockProducts = [
         threshold: 8,
         updatedAt: '2026-04-01T14:30:00.000Z',
       },
+      {
+        id: 'loc-instore-3',
+        location_name: 'สาขาอโศก',
+        location_type: 'in-store',
+        quantity: 5,         // 3 + 1 + 1 + 0
+        available: 3,
+        unavailable: 1,
+        reserve: 1,
+        preorder: 0,
+        threshold: 6,
+        updatedAt: '2026-04-01T14:30:00.000Z',
+      },
+      {
+        id: 'loc-instore-4',
+        location_name: 'สาขาสยาม',
+        location_type: 'in-store',
+        quantity: 9,         // 7 + 0 + 2 + 0
+        available: 7,
+        unavailable: 0,
+        reserve: 2,
+        preorder: 0,
+        threshold: 5,
+        updatedAt: '2026-04-01T14:30:00.000Z',
+      },
+      {
+        id: 'loc-instore-5',
+        location_name: 'สาขารัชดา',
+        location_type: 'in-store',
+        quantity: 1,         // 0 + 1 + 0 + 0
+        available: 0,
+        unavailable: 1,
+        reserve: 0,
+        preorder: 0,
+        threshold: 4,
+        updatedAt: '2026-04-01T14:30:00.000Z',
+      },
     ],
   },
   {
@@ -88,6 +165,7 @@ export const mockProducts = [
     productType: 'physical',
     status: 'active',
     updatedAt: '2026-04-07T11:00:00.000Z',
+    stockLimits: { min: null, max: null },
     stocks: [
       {
         id: 302,
@@ -113,6 +191,42 @@ export const mockProducts = [
         threshold: null,
         updatedAt: '2026-04-07T11:00:00.000Z',
       },
+      {
+        id: 'loc-instore-3',
+        location_name: 'สาขาอโศก',
+        location_type: 'in-store',
+        quantity: 24,        // 20 + 1 + 3 + 0
+        available: 20,
+        unavailable: 1,
+        reserve: 3,
+        preorder: 0,
+        threshold: 8,
+        updatedAt: '2026-04-07T11:00:00.000Z',
+      },
+      {
+        id: 'loc-instore-4',
+        location_name: 'สาขาสยาม',
+        location_type: 'in-store',
+        quantity: 6,         // 4 + 0 + 1 + 1
+        available: 4,
+        unavailable: 0,
+        reserve: 1,
+        preorder: 1,
+        threshold: 10,
+        updatedAt: '2026-04-07T11:00:00.000Z',
+      },
+      {
+        id: 'loc-instore-5',
+        location_name: 'สาขารัชดา',
+        location_type: 'in-store',
+        quantity: 12,        // 11 + 1 + 0 + 0
+        available: 11,
+        unavailable: 1,
+        reserve: 0,
+        preorder: 0,
+        threshold: null,
+        updatedAt: '2026-04-07T11:00:00.000Z',
+      },
     ],
   },
   {
@@ -124,6 +238,7 @@ export const mockProducts = [
     productType: 'physical',
     status: 'active',
     updatedAt: '2026-04-10T16:45:00.000Z',
+    stockLimits: { min: 20, max: 40 },
     stocks: [
       {
         id: 402,
@@ -149,6 +264,42 @@ export const mockProducts = [
         threshold: 1,
         updatedAt: '2026-04-10T16:45:00.000Z',
       },
+      {
+        id: 'loc-instore-3',
+        location_name: 'สาขาอโศก',
+        location_type: 'in-store',
+        quantity: 4,         // 1 + 1 + 1 + 1
+        available: 1,
+        unavailable: 1,
+        reserve: 1,
+        preorder: 1,
+        threshold: 2,
+        updatedAt: '2026-04-10T16:45:00.000Z',
+      },
+      {
+        id: 'loc-instore-4',
+        location_name: 'สาขาสยาม',
+        location_type: 'in-store',
+        quantity: 3,         // 2 + 0 + 1 + 0
+        available: 2,
+        unavailable: 0,
+        reserve: 1,
+        preorder: 0,
+        threshold: 3,
+        updatedAt: '2026-04-10T16:45:00.000Z',
+      },
+      {
+        id: 'loc-instore-5',
+        location_name: 'สาขารัชดา',
+        location_type: 'in-store',
+        quantity: 0,
+        available: 0,
+        unavailable: 0,
+        reserve: 0,
+        preorder: 0,
+        threshold: 2,
+        updatedAt: '2026-04-10T16:45:00.000Z',
+      },
     ],
   },
   {
@@ -160,6 +311,7 @@ export const mockProducts = [
     productType: 'physical',
     status: 'active',
     updatedAt: '2026-04-14T08:20:00.000Z',
+    stockLimits: { min: null, max: null },
     stocks: [
       {
         id: 502,
@@ -183,6 +335,42 @@ export const mockProducts = [
         reserve: 1,
         preorder: 0,
         threshold: 20,
+        updatedAt: '2026-04-14T08:20:00.000Z',
+      },
+      {
+        id: 'loc-instore-3',
+        location_name: 'สาขาอโศก',
+        location_type: 'in-store',
+        quantity: 52,        // 46 + 3 + 3 + 0
+        available: 46,
+        unavailable: 3,
+        reserve: 3,
+        preorder: 0,
+        threshold: 25,
+        updatedAt: '2026-04-14T08:20:00.000Z',
+      },
+      {
+        id: 'loc-instore-4',
+        location_name: 'สาขาสยาม',
+        location_type: 'in-store',
+        quantity: 14,        // 9 + 2 + 1 + 2
+        available: 9,
+        unavailable: 2,
+        reserve: 1,
+        preorder: 2,
+        threshold: 15,
+        updatedAt: '2026-04-14T08:20:00.000Z',
+      },
+      {
+        id: 'loc-instore-5',
+        location_name: 'สาขารัชดา',
+        location_type: 'in-store',
+        quantity: 30,        // 28 + 1 + 1 + 0
+        available: 28,
+        unavailable: 1,
+        reserve: 1,
+        preorder: 0,
+        threshold: null,
         updatedAt: '2026-04-14T08:20:00.000Z',
       },
     ],

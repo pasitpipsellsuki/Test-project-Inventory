@@ -1,11 +1,8 @@
-import { useState } from 'react'
 import { Alert, DSButton } from "@uxuissk/design-system"
 import { getTotalAvailable } from '../constants/inventory'
 
 export default function LowStockAlertBanner({ lowStockProducts, onViewAlerts }) {
-  const [dismissed, setDismissed] = useState(false)
-
-  if (lowStockProducts.length === 0 || dismissed) return null
+  if (lowStockProducts.length === 0) return null
 
   // CARD-007: split based on `available`, not `quantity` (matches threshold logic).
   // A product with zero sellable units across every location is treated as out of stock.
@@ -17,8 +14,6 @@ export default function LowStockAlertBanner({ lowStockProducts, onViewAlerts }) 
       <Alert
         variant="warning"
         title={`${lowStockProducts.length} product${lowStockProducts.length !== 1 ? 's' : ''} need attention`}
-        dismissible
-        onDismiss={() => setDismissed(true)}
       >
         <div>
           <ul className="mt-1 space-y-0.5">

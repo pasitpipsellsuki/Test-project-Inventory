@@ -5,32 +5,27 @@ import { Alert, DSButton, DSInput, Modal } from "@uxuissk/design-system"
  * StockThresholdModal
  *
  * Props:
- *   product: { id, name, sku, productType, stocks: [{ id, location_name, location_type, threshold, ... }] }
+ *   product: { id, name, sku, productType, stockLimits: { min, max } }
  *   role: 'company_owner' | 'store_admin' | 'store_staff'
- *   onSave: (productId, locationThresholds) => void
- *         locationThresholds = [{ locationId, threshold: number | null }]
+ *   onSave: (productId, { min, max }) => void
+ *         min, max = number | null
  *   onClose: () => void
  *
  * Role-based visibility:
- *   company_owner -> all locations editable
- *   store_admin   -> in-store locations only
+ *   company_owner -> editable
+ *   store_admin   -> editable
  *   store_staff   -> read-only message
+ *
+ * CARD-020: redesigned from per-location threshold inputs to a 2-field
+ * Master Min/Max editor backed by product.stockLimits.
  */
 const StockThresholdModal = ({ product, role, onSave, onClose }) => {
-  const stocks = product?.stocks || []
   const isReadOnly = role === 'store_staff'
 
-  const visibleStocks = role === 'company_owner'
-    ? stocks
-    : stocks.filter((s) => s.location_type === 'in-store')
-
-  const buildInitialValues = () => {
-    const init = {}
-    visibleStocks.forEach((s) => {
-      init[s.id] = s.threshold != null ? String(s.threshold) : ''
-    })
-    return init
-  }
+  const buildInitialValues = () => ({
+    min: product?.stockLimits?.min != null ? String(product.stockLimits.min) : '',
+    max: product?.stockLimits?.max != null ? String(product.stockLimits.max) : '',
+  })
 
   const [values, setValues] = useState(buildInitialValues)
   const [errors, setErrors] = useState({})
@@ -41,16 +36,16 @@ const StockThresholdModal = ({ product, role, onSave, onClose }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [product?.id])
 
-  const validateValue = (raw) => {
+  const parseField = (raw) => {
     if (raw === '' || raw === null || raw === undefined) {
       return { ok: true, parsed: null, error: '' }
     }
-    if (!/^-?\d+$/.test(String(raw).trim())) {
-      return { ok: false, parsed: null, error: 'Must be a whole number' }
+    if (!/^\d+$/.test(String(raw).trim())) {
+      return { ok: false, parsed: null, error: 'Must be a non-negative whole number' }
     }
     const parsed = parseInt(raw, 10)
-    if (Number.isNaN(parsed) || parsed < 1) {
-      return { ok: false, parsed: null, error: 'Must be 1 or greater' }
+    if (Number.isNaN(parsed) || parsed < 0) {
+      return { ok: false, parsed: null, error: 'Must be 0 or greater' }
     }
     return { ok: true, parsed, error: '' }
   }
@@ -58,30 +53,36 @@ const StockThresholdModal = ({ product, role, onSave, onClose }) => {
   const handleSave = () => {
     if (isReadOnly) { onClose(); return }
 
+    const minResult = parseField(values.min)
+    const maxResult = parseField(values.max)
     const newErrors = {}
-    const locationThresholds = []
-    let valid = true
 
-    visibleStocks.forEach((s) => {
-      const r = validateValue(values[s.id])
-      if (!r.ok) {
-        newErrors[s.id] = r.error
-        valid = false
-      } else {
-        locationThresholds.push({ locationId: s.id, threshold: r.parsed })
-      }
-    })
+    if (!minResult.ok) newErrors.min = minResult.error
+    if (!maxResult.ok) newErrors.max = maxResult.error
 
-    if (!valid) { setErrors(newErrors); return }
+    if (
+      minResult.ok &&
+      maxResult.ok &&
+      minResult.parsed != null &&
+      maxResult.parsed != null &&
+      maxResult.parsed <= minResult.parsed
+    ) {
+      newErrors.max = 'Maximum must be greater than Minimum'
+    }
 
-    // Preserve thresholds for locations not shown to this role
-    const allLocationThresholds = stocks.map((s) => {
-      const found = locationThresholds.find((lt) => lt.locationId === s.id)
-      return found ?? { locationId: s.id, threshold: s.threshold ?? null }
-    })
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors)
+      return
+    }
 
-    onSave(product.id, allLocationThresholds)
+    onSave(product.id, { min: minResult.parsed, max: maxResult.parsed })
     onClose()
+  }
+
+  const handleChange = (field) => (e) => {
+    const next = e.target.value
+    setValues((prev) => ({ ...prev, [field]: next }))
+    if (errors[field]) setErrors((prev) => ({ ...prev, [field]: '' }))
   }
 
   return (
@@ -107,8 +108,8 @@ const StockThresholdModal = ({ product, role, onSave, onClose }) => {
       </div>
 
       <p className="text-xs text-gray-500 mb-4">
-        Set an alert threshold per location. An alert triggers when available stock at that location
-        drops below the threshold. Leave empty for no alert.
+        Set master Min/Max stock thresholds for this product. Leave a field empty
+        for no limit.
       </p>
 
       <div className="space-y-4">
@@ -119,30 +120,35 @@ const StockThresholdModal = ({ product, role, onSave, onClose }) => {
           </Alert>
         )}
 
-        {visibleStocks.length === 0 && !isReadOnly && (
-          <Alert variant="warning">
-            No locations available to configure.
-          </Alert>
-        )}
+        <DSInput
+          label="Minimum Stock Threshold"
+          type="number"
+          fullWidth
+          value={values.min}
+          onChange={handleChange('min')}
+          state={errors.min ? 'error' : 'default'}
+          errorMessage={errors.min}
+          helperText="Alert triggers when total available falls at or below this number"
+          placeholder="Leave empty for no limit"
+          disabled={isReadOnly}
+        />
 
-        {visibleStocks.map((s) => (
-          <DSInput
-            key={s.id}
-            label={s.location_name}
-            type="number"
-            fullWidth
-            value={values[s.id] ?? ''}
-            onChange={(e) => {
-              setValues((prev) => ({ ...prev, [s.id]: e.target.value }))
-              if (errors[s.id]) setErrors((prev) => ({ ...prev, [s.id]: '' }))
-            }}
-            state={errors[s.id] ? 'error' : 'default'}
-            errorMessage={errors[s.id]}
-            helperText="Alert when available stock drops below this number"
-            placeholder="Leave empty for no alert"
-            disabled={isReadOnly}
-          />
-        ))}
+        <DSInput
+          label="Maximum Stock Threshold"
+          type="number"
+          fullWidth
+          value={values.max}
+          onChange={handleChange('max')}
+          state={errors.max ? 'error' : 'default'}
+          errorMessage={errors.max}
+          helperText="Informational upper limit. No blocking in Adjust flow."
+          placeholder="Leave empty for no limit"
+          disabled={isReadOnly}
+        />
+
+        <Alert variant="info">
+          Per-store threshold overrides can be configured by Store Admin in OMS.
+        </Alert>
       </div>
     </Modal>
   )

@@ -11,15 +11,33 @@ import { DSButton, Badge, Modal } from '@uxuissk/design-system'
  * Props:
  *   product:    full product object ({ id, name, sku, stocks, ... })
  *   adjustment: { productId, action, locationId, qty, reason }
- *               action ∈ 'add_stock' | 'decrease' | 'mark_damaged'
+ *               action ∈ 'add' | 'decrease' | 'mark_unavailable' | 'restore_to_available'
  *   stocks:     product.stocks — the CURRENT (pre-adjustment) stocks array
  *   onConfirm:  () => void  — user clicks Confirm
  *   onBack:     () => void  — user clicks Back (returns to entry form)
  *   onCancel:   () => void  — user clicks Cancel / closes modal
+ *
+ * CARD-018: BRD PIS-INV-01 Round 8. The stock impact is reason-driven. The
+ * incoming `adjustment.action` is the effective effect type computed by
+ * StockAdjustmentModal's getEffectiveType(resolvedType, reason); the
+ * 'Restore to Available' and 'Mark Unavailable (...)' reasons reclassify stock
+ * between the Available and Unavailable pools while On Hand stays unchanged.
+ * resolveEffectiveType() recomputes from the reason defensively so the deltas
+ * are correct even if `action` is passed as the raw picked type.
  */
 
+// Recompute the effective stock-effect type from the picked action + reason.
+// Mirrors getEffectiveType in StockAdjustmentModal.
+function resolveEffectiveType(action, reason) {
+  if (reason === 'Restore to Available') return 'restore_to_available'
+  if (typeof reason === 'string' && reason.startsWith('Mark Unavailable')) {
+    return 'mark_unavailable'
+  }
+  return action
+}
+
 const ACTION_META = {
-  add_stock: {
+  add: {
     label: 'Add Stock',
     badgeVariant: 'success',
     confirmVariant: 'primary',
@@ -27,18 +45,25 @@ const ACTION_META = {
     sign: '+',
   },
   decrease: {
-    label: 'Decrease',
+    label: 'Decrease Stock',
     badgeVariant: 'destructive',
     confirmVariant: 'destructive',
     impactColor: 'text-red-700',
     sign: '−',
   },
-  mark_damaged: {
-    label: 'Mark Damaged',
-    badgeVariant: 'warning',
+  mark_unavailable: {
+    label: 'Mark Unavailable',
+    badgeVariant: 'destructive',
     confirmVariant: 'destructive',
-    impactColor: 'text-amber-700',
+    impactColor: 'text-red-700',
     sign: '−',
+  },
+  restore_to_available: {
+    label: 'Restore to Available',
+    badgeVariant: 'info',
+    confirmVariant: 'primary',
+    impactColor: 'text-blue-700',
+    sign: '+',
   },
 }
 
@@ -90,7 +115,13 @@ export default function StockAdjustmentConfirmModal({
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [onCancel])
 
-  const meta = ACTION_META[adjustment?.action] || {
+  // Effective stock-effect type — reason-driven, recomputed defensively.
+  const effectiveType = resolveEffectiveType(
+    adjustment?.action,
+    adjustment?.reason
+  )
+
+  const meta = ACTION_META[effectiveType] || {
     label: adjustment?.action || 'Adjustment',
     badgeVariant: 'default',
     confirmVariant: 'primary',
@@ -114,19 +145,28 @@ export default function StockAdjustmentConfirmModal({
   let projectedUnavailable = currentUnavailable
   let projectedQuantity = currentQuantity
 
-  switch (adjustment.action) {
-    case 'add_stock':
+  switch (effectiveType) {
+    case 'add':
+      // Standard add (incl. Transfer In): Available +qty, On Hand +qty.
       projectedAvailable = currentAvailable + qty
       projectedQuantity = currentQuantity + qty
       break
     case 'decrease':
+      // Standard decrease (incl. Transfer Out): Available -qty, On Hand -qty.
       projectedAvailable = currentAvailable - qty
       projectedQuantity = currentQuantity - qty
       break
-    case 'mark_damaged':
+    case 'mark_unavailable':
+      // Decrease + 'Mark Unavailable (...)' reason:
+      // Available -qty, Unavailable +qty, On Hand unchanged.
       projectedAvailable = currentAvailable - qty
       projectedUnavailable = currentUnavailable + qty
-      // quantity unchanged
+      break
+    case 'restore_to_available':
+      // Add + 'Restore to Available' reason:
+      // Unavailable -qty, Available +qty, On Hand unchanged.
+      projectedAvailable = currentAvailable + qty
+      projectedUnavailable = currentUnavailable - qty
       break
     default:
       break
@@ -154,7 +194,7 @@ export default function StockAdjustmentConfirmModal({
     <Modal
       open={true}
       onClose={onCancel}
-      title="Confirm Stock Adjustment"
+      title={`Confirm — ${meta.label}`}
       size="md"
       footer={footer}
     >
@@ -196,31 +236,43 @@ export default function StockAdjustmentConfirmModal({
       </div>
 
       <div className="rounded-md border border-gray-200 bg-gray-50 px-4 py-3">
-        {adjustment.action === 'mark_damaged' ? (
-          <>
-            <ImpactRow
-              label="Available"
-              current={currentAvailable}
-              projected={projectedAvailable}
-              deltaText={`Available −${qty} → ${projectedAvailable}`}
-              deltaClass="text-red-700"
-            />
-            <ImpactRow
-              label="Unavailable"
-              current={currentUnavailable}
-              projected={projectedUnavailable}
-              deltaText={`Unavailable +${qty} → ${projectedUnavailable}`}
-              deltaClass="text-amber-700"
-            />
-            <ImpactRow
-              label="On Hand (quantity)"
-              current={currentQuantity}
-              projected={projectedQuantity}
-              deltaText="Unchanged"
-              deltaClass="text-gray-500"
-            />
-          </>
+        {effectiveType === 'mark_unavailable' ||
+        effectiveType === 'restore_to_available' ? (
+          // Reclassification reasons: shift between Available and Unavailable;
+          // On Hand stays the same.
+          (() => {
+            const isMark = effectiveType === 'mark_unavailable'
+            // mark_unavailable: Available −qty, Unavailable +qty.
+            // restore_to_available: Available +qty, Unavailable −qty.
+            return (
+              <>
+                <ImpactRow
+                  label="Available"
+                  current={currentAvailable}
+                  projected={projectedAvailable}
+                  deltaText={`Available ${isMark ? '−' : '+'}${qty} → ${projectedAvailable}`}
+                  deltaClass={isMark ? 'text-red-700' : 'text-blue-700'}
+                />
+                <ImpactRow
+                  label="Unavailable"
+                  current={currentUnavailable}
+                  projected={projectedUnavailable}
+                  deltaText={`Unavailable ${isMark ? '+' : '−'}${qty} → ${projectedUnavailable}`}
+                  deltaClass={isMark ? 'text-amber-700' : 'text-blue-700'}
+                />
+                <ImpactRow
+                  label="On Hand (quantity)"
+                  current={currentQuantity}
+                  projected={projectedQuantity}
+                  deltaText="Unchanged"
+                  deltaClass="text-gray-500"
+                />
+              </>
+            )
+          })()
         ) : (
+          // add / decrease (via the 'adjust' action): Available and On Hand
+          // both move by ±qty.
           <>
             <ImpactRow
               label="Available"
